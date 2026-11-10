@@ -1,0 +1,30 @@
+# --- Secrets: never commit these ---
+.env
+.env.*
+*.pem
+*.key
+kaggle.json
+.databrickscfg
+secrets*.yml
+secrets*.json
+
+# --- Raw data (too big for git; we document how to download it instead) ---
+data/
+*.csv
+
+# --- Databricks bundle local state ---
+.databricks/
+
+# --- Python ---
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

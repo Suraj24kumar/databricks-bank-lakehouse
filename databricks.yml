@@ -1,0 +1,79 @@
+# Databricks Asset Bundle for the bank lakehouse. Everything runs on serverless compute (the only kind on Free Edition).
+#   databricks bundle validate
+#   databricks bundle deploy -t dev
+#   databricks bundle run bank_daily -t dev --params day=0     # initial load
+#   databricks bundle run bank_daily -t dev --params day=1     # incremental day (then 2, 3, ...)
+# UNTESTED on a live workspace: treat `bundle validate` errors as normal first-run feedback and fix them (see README).
+bundle:
+  name: bank_lakehouse
+
+variables:
+  catalog:
+    default: workspace      # Free Edition ships with the `workspace` catalog
+  schema:
+    default: bank_lakehouse
+
+resources:
+  schemas:
+    bank:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: Bank lakehouse (bronze_*, silver_*, quarantine_*, dim_*/fct_*/gold_*).
+
+  volumes:
+    landing:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.bank.name}
+      name: landing
+      volume_type: MANAGED     # Free Edition: no custom storage locations
+
+  pipelines:
+    bank_lakehouse:
+      name: bank_lakehouse
+      catalog: ${var.catalog}
+      schema: ${resources.schemas.bank.name}
+      serverless: true
+      continuous: false        # triggered by the job below
+      root_path: ./src         # puts `bank_lakehouse` (shared rules) on sys.path for the pipeline files
+      libraries:
+        - glob:
+            include: ./src/bank_pipeline/transformations/**
+      configuration:
+        bank.landing_path: /Volumes/${var.catalog}/${resources.schemas.bank.name}/landing
+
+  jobs:
+    bank_daily:
+      name: bank_daily
+      description: land day N -> refresh pipeline (Auto Loader + AUTO CDC) -> DQ gate
+      max_concurrent_runs: 1   # Free Edition: 1 active pipeline update, max 5 concurrent tasks
+      queue:
+        enabled: true
+      parameters:
+        - name: day
+          default: "0"
+      tasks:
+        - task_key: land_day
+          notebook_task:
+            notebook_path: ./notebooks/01_generate_day.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${resources.schemas.bank.name}
+              day: "{{job.parameters.day}}"
+        - task_key: refresh_pipeline
+          depends_on: [{task_key: land_day}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.bank_lakehouse.id}
+            full_refresh: false
+        - task_key: dq_gate
+          depends_on: [{task_key: refresh_pipeline}]
+          notebook_task:
+            notebook_path: ./notebooks/02_dq_gate.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${resources.schemas.bank.name}
+      # No schedule on purpose: Free Edition has a daily compute quota. Add `schedule:` once the manual runs are stable.
+
+targets:
+  dev:
+    mode: development
+    default: true
