@@ -7,7 +7,11 @@ from pyspark.sql import functions as F
 @dp.materialized_view(name="dim_customer", comment="SCD2 customer dimension with an explicit Y/N current flag.", table_properties={"quality": "gold"})
 def dim_customer():
     c = spark.read.table("silver_customers")
-    return c.withColumn("is_current", F.when(F.col("__END_AT").isNull(), F.lit("Y")).otherwise(F.lit("N")))
+    return (
+        c.withColumn("valid_from", F.col("__START_AT"))
+        .withColumn("valid_to", F.coalesce(F.col("__END_AT"), F.lit("9999-12-31 00:00:00").cast("timestamp")))
+        .withColumn("is_current", F.when(F.col("__END_AT").isNull(), F.lit("Y")).otherwise(F.lit("N")))
+    )
 
 
 @dp.materialized_view(
@@ -29,8 +33,9 @@ def fct_transactions():
         t.join(c, cond, "left")
         .select(
             "t.txn_id", "t.account_id", "t.customer_id", "t.txn_ts", F.to_date("t.txn_ts").alias("txn_date"),
-            "t.amount", "t.channel", "t.txn_type",
+            "t.amount", "t.channel", "t.txn_type", "t.txn_city",
             F.col("c.city").alias("city"), F.col("c.segment").alias("segment"),
+            (F.col("t.txn_city") != F.col("c.city")).alias("is_away"),
             F.col("c.kyc_status").alias("kyc_status"), F.col("c.__START_AT").alias("customer_sk_start"),
         )
     )

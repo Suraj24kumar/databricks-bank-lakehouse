@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-CITIES = ["Kuala Lumpur", "Bengaluru", "Mumbai", "Singapore", "Jakarta", "Manila"]
+CITIES = ["BANGALORE", "MUMBAI", "DELHI", "PUNE", "HYDERABAD", "CHENNAI", "KOLKATA", "JAMSHEDPUR", "MUZAFFARPUR", "PATNA"]
 SEGMENTS = ["RETAIL", "PREMIUM", "SME"]
 KYC = ["PENDING", "VERIFIED", "EXPIRED"]
 RISK = ["LOW", "MEDIUM", "HIGH"]
@@ -30,7 +30,9 @@ TXN_TYPES = ["DEBIT", "CREDIT"]
 
 CUSTOMER_COLS = ["customer_id", "name", "email", "city", "segment", "kyc_status", "risk_band", "op", "updated_at"]
 ACCOUNT_COLS = ["account_id", "customer_id", "account_type", "status", "op", "updated_at"]
-TXN_COLS = ["txn_id", "account_id", "customer_id", "txn_ts", "amount", "currency", "channel", "txn_type"]
+# txn_city = WHERE the transaction happened. It is NOT the customer's city (customers.city = registered home city).
+TXN_COLS = ["txn_id", "account_id", "customer_id", "txn_ts", "amount", "currency", "channel", "txn_type", "txn_city"]
+TRIPS_PER_DAY = 5  # customers doing a same-day round trip: home, away, away, home
 
 START_DATE = date(2026, 1, 1)
 INITIAL_CUSTOMERS = 300
@@ -44,6 +46,7 @@ class World:
     next_customer: int = 1
     next_account: int = 1
     next_txn: int = 1
+    trip_customers: list = field(default_factory=list)
 
 
 def _ts(d: date, rng: random.Random) -> str:
@@ -103,16 +106,32 @@ def _step(w: World, day: int) -> tuple[list, list, list]:
 
     txns: list = []
     live_accounts = sorted(a for a, v in w.accounts.items() if v["customer_id"] in w.customers)
-    for _ in range(TXNS_PER_DAY):
+
+    def add_txn(aid, ts, city):
+        txns.append({
+            "txn_id": f"T{w.next_txn:09d}", "account_id": aid, "customer_id": w.accounts[aid]["customer_id"],
+            "txn_ts": ts, "amount": f"{min(rng.lognormvariate(6.5, 1.1), 500000):.2f}", "currency": "INR",
+            "channel": rng.choice(CHANNELS), "txn_type": rng.choice(TXN_TYPES), "txn_city": city,
+        })
+        w.next_txn += 1
+
+    # Same-day round trips: 4 transactions on one account: home, away, away, home. The customer's registered city does NOT change.
+    w.trip_customers = []
+    for aid in rng.sample(live_accounts, k=TRIPS_PER_DAY):
+        home = w.customers[w.accounts[aid]["customer_id"]]["city"]
+        away = rng.choice([c for c in CITIES if c != home])
+        start = datetime.combine(d, datetime.min.time()) + timedelta(hours=rng.randint(6, 8), minutes=rng.randint(0, 59))
+        for k, (hours, city) in enumerate(((0, home), (4, away), (5, away), (11, home))):
+            add_txn(aid, (start + timedelta(hours=hours, minutes=k)).strftime("%Y-%m-%d %H:%M:%S"), city)
+        w.trip_customers.append(w.accounts[aid]["customer_id"])
+
+    for _ in range(TXNS_PER_DAY - 4 * TRIPS_PER_DAY):
         aid = rng.choice(live_accounts)
         late = rng.random() < 0.02  # 2% arrive a day late: event time is yesterday
         ev_day = d - timedelta(days=1) if (late and day > 0) else d
-        txns.append({
-            "txn_id": f"T{w.next_txn:09d}", "account_id": aid, "customer_id": w.accounts[aid]["customer_id"],
-            "txn_ts": _ts(ev_day, rng), "amount": f"{rng.uniform(1, 5000):.2f}", "currency": "MYR",
-            "channel": rng.choice(CHANNELS), "txn_type": rng.choice(TXN_TYPES),
-        })
-        w.next_txn += 1
+        home = w.customers[w.accounts[aid]["customer_id"]]["city"]
+        city = rng.choice([c for c in CITIES if c != home]) if rng.random() < 0.08 else home  # 8% of txns happen while travelling
+        add_txn(aid, _ts(ev_day, rng), city)
     return cust_out, acc_out, txns
 
 
@@ -157,5 +176,5 @@ def generate_day(day: int, root: str | Path) -> dict:
             writer.writeheader()
             writer.writerows(rows)
         tmp.replace(path)  # same bytes every time for the same day
-    manifest.update({"day": day, "date": label, "customer_changes": len(cust), "account_changes": len(acc), "transactions_landed": len(txns_final)})
+    manifest.update({"round_trip_customers": list(w.trip_customers), "day": day, "date": label, "customer_changes": len(cust), "account_changes": len(acc), "transactions_landed": len(txns_final)})
     return manifest

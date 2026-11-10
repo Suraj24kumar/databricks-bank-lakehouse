@@ -6,7 +6,7 @@ from __future__ import annotations
 RAW_COLUMNS = {
     "customers": ["customer_id", "name", "email", "city", "segment", "kyc_status", "risk_band", "op", "updated_at"],
     "accounts": ["account_id", "customer_id", "account_type", "status", "op", "updated_at"],
-    "transactions": ["txn_id", "account_id", "customer_id", "txn_ts", "amount", "currency", "channel", "txn_type"],
+    "transactions": ["txn_id", "account_id", "customer_id", "txn_ts", "amount", "currency", "channel", "txn_type", "txn_city"],
 }
 
 # SCD2 tracks these; `email` is deliberately NOT tracked, so an email change updates the current row in place.
